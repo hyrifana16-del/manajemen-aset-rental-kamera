@@ -110,7 +110,7 @@
               <span class="panel-heading-icon" aria-hidden="true">＋</span>
             </div>
             <p class="panel-description">Isi nominal tarif dan biaya secara langsung. Estimasi penyusutan dihitung otomatis dari kamera dan masa sewa.</p>
-            <details class="camera-create">
+            <details class="create-details camera-create">
               <summary>＋ Tambah jenis kamera / aset</summary>
               <form id="camera-form" class="camera-form">
                 <label class="field">
@@ -145,7 +145,31 @@
                     <input name="estimasi_total_hari_sewa" type="number" min="1" step="1" required placeholder="Contoh: 900">
                   </label>
                 </div>
+                <label class="field">
+                  <span>Tarif sewa per hari (Rp)</span>
+                  <input name="tarif_sewa_harian" type="number" min="0" step="any" placeholder="Opsional">
+                </label>
+                <div id="camera-form-message" class="form-message" role="status" aria-live="polite"></div>
                 <button class="primary-button" type="submit"><span>Simpan kamera</span></button>
+              </form>
+            </details>
+            <details class="create-details renter-create">
+              <summary>＋ Tambah penyewa</summary>
+              <form id="renter-form" class="renter-form">
+                <label class="field">
+                  <span>Nama penyewa</span>
+                  <input name="nama" required maxlength="120" placeholder="Nama lengkap atau nama usaha">
+                </label>
+                <label class="field">
+                  <span>Nomor telepon</span>
+                  <input name="no_telepon" type="tel" required maxlength="30" placeholder="Contoh: 081234567890">
+                </label>
+                <label class="field">
+                  <span>Email <small>(opsional)</small></span>
+                  <input name="email" type="email" maxlength="160" placeholder="nama@example.com">
+                </label>
+                <div id="renter-form-message" class="form-message" role="status" aria-live="polite"></div>
+                <button class="primary-button" type="submit"><span>Simpan penyewa</span></button>
               </form>
             </details>
             <form id="rental-form">

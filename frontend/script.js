@@ -13,6 +13,8 @@ const cameraStatuses = ["Tersedia", "Sedang disewa", "Perbaikan", "Sudah dikemba
 
 const elements = {
   cameraSelect: document.getElementById("camera-select"),
+  cameraForm: document.getElementById("camera-form"),
+  cameraFormMessage: document.getElementById("camera-form-message"),
   cameraRate: document.getElementById("camera-rate"),
   connectionDot: document.getElementById("connection-dot"),
   connectionStatus: document.getElementById("connection-status"),
@@ -24,6 +26,8 @@ const elements = {
   greeting: document.getElementById("dashboard-greeting"),
   journalRows: document.getElementById("journal-rows"),
   renterSelect: document.getElementById("renter-select"),
+  renterForm: document.getElementById("renter-form"),
+  renterFormMessage: document.getElementById("renter-form-message"),
   rentalCount: document.getElementById("rental-count"),
   rentalFee: document.getElementById("rental-fee"),
   startDate: document.getElementById("start-date"),
@@ -69,6 +73,11 @@ function showStatusMessage(message, type) {
 function clearStatusMessage() {
   elements.cameraStatusMessage.textContent = "";
   elements.cameraStatusMessage.className = "form-message";
+}
+
+function showInlineFormMessage(element, message, type) {
+  element.textContent = message;
+  element.className = `form-message visible ${type}`;
 }
 
 function parseDateAsUtc(value) {
@@ -600,6 +609,90 @@ function generateTransactionCode() {
   return `TRX-${timestamp}-${suffix}`;
 }
 
+async function submitCamera(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button[type='submit']");
+  const formData = new FormData(form);
+  const dailyRate = formData.get("tarif_sewa_harian");
+  const rateWasSkipped = !cameraRateAvailable && dailyRate !== "";
+  const camera = {
+    nama_aset: String(formData.get("nama_aset")).trim(),
+    kode_aset: String(formData.get("kode_aset")).trim(),
+    merk_model: String(formData.get("merk_model")).trim(),
+    tanggal_perolehan: formData.get("tanggal_perolehan"),
+    harga_perolehan: Number(formData.get("harga_perolehan")),
+    nilai_residu: Number(formData.get("nilai_residu")),
+    estimasi_total_hari_sewa: Number(formData.get("estimasi_total_hari_sewa")),
+  };
+  if (camera.nilai_residu > camera.harga_perolehan) {
+    showInlineFormMessage(elements.cameraFormMessage, "Nilai residu tidak boleh melebihi harga perolehan.", "error");
+    return;
+  }
+  if (cameraRateAvailable && dailyRate !== "") {
+    camera.tarif_sewa_harian = Number(dailyRate);
+  }
+
+  button.disabled = true;
+  button.querySelector("span").textContent = "Menyimpan...";
+  elements.cameraFormMessage.className = "form-message";
+  try {
+    const { error } = await window.supabaseClient.from("kamera").insert(camera);
+    if (error) throw new Error(error.message);
+    form.reset();
+    form.elements.nilai_residu.value = "0";
+    await loadDashboard();
+    const savedCamera = cameras.find((item) => item.kode_aset === camera.kode_aset);
+    if (savedCamera) {
+      elements.cameraSelect.value = String(savedCamera.id);
+      syncCameraRate();
+      refreshRentalPreviews();
+    }
+    showInlineFormMessage(
+      elements.cameraFormMessage,
+      rateWasSkipped
+        ? "Kamera berhasil ditambahkan, tetapi tarif belum disimpan karena kolom tarif belum tersedia di database."
+        : "Kamera berhasil ditambahkan.",
+      "success",
+    );
+  } catch (error) {
+    showInlineFormMessage(elements.cameraFormMessage, `Kamera gagal ditambahkan: ${error.message || String(error)}`, "error");
+  } finally {
+    button.disabled = false;
+    button.querySelector("span").textContent = "Simpan kamera";
+  }
+}
+
+async function submitRenter(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button[type='submit']");
+  const formData = new FormData(form);
+  const renter = {
+    nama: String(formData.get("nama")).trim(),
+    no_telepon: String(formData.get("no_telepon")).trim(),
+    email: String(formData.get("email")).trim() || null,
+  };
+
+  button.disabled = true;
+  button.querySelector("span").textContent = "Menyimpan...";
+  elements.renterFormMessage.className = "form-message";
+  try {
+    const { error } = await window.supabaseClient.from("penyewa").insert(renter);
+    if (error) throw new Error(error.message);
+    form.reset();
+    await loadDashboard();
+    const savedRenter = renters.find((item) => item.no_telepon === renter.no_telepon);
+    if (savedRenter) elements.renterSelect.value = String(savedRenter.id);
+    showInlineFormMessage(elements.renterFormMessage, "Penyewa berhasil ditambahkan.", "success");
+  } catch (error) {
+    showInlineFormMessage(elements.renterFormMessage, `Penyewa gagal ditambahkan: ${error.message || String(error)}`, "error");
+  } finally {
+    button.disabled = false;
+    button.querySelector("span").textContent = "Simpan penyewa";
+  }
+}
+
 async function submitRental(event) {
   event.preventDefault();
   clearFormMessage();
@@ -795,6 +888,8 @@ document.getElementById("today-label").textContent = new Intl.DateTimeFormat("id
 const hour = now.getHours();
 elements.greeting.textContent = `${hour < 11 ? "Selamat pagi" : hour < 15 ? "Selamat siang" : hour < 18 ? "Selamat sore" : "Selamat malam"}, Rental Kamera!`;
 elements.form.addEventListener("submit", submitRental);
+elements.cameraForm.addEventListener("submit", submitCamera);
+elements.renterForm.addEventListener("submit", submitRenter);
 elements.cameraSelect.addEventListener("change", () => {
   syncCameraRate();
   refreshRentalPreviews();

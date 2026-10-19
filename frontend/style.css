@@ -89,6 +89,10 @@ h1 { color: #27293a; font-size: 23px; font-weight: 700; }
 .panel-heading-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: #f0efff; color: var(--purple); font-size: 18px; }
 .panel-description { margin: 8px 0 20px; color: #9294a4; font-size: 11px; }
 #rental-form { display: grid; gap: 13px; }
+.create-details { padding: 10px 11px; border: 1px solid #e9eaf0; border-radius: 8px; background: #fbfbfd; }
+.create-details + .create-details { margin-top: 9px; }
+.create-details summary { color: #5b52c9; font-size: 11px; font-weight: 600; cursor: pointer; }
+.camera-form, .renter-form { display: grid; gap: 12px; margin-top: 13px; }
 .field { display: grid; gap: 6px; min-width: 0; color: #5c5e70; font-size: 10px; font-weight: 600; }
 .field small { color: #a0a1ae; font-weight: 400; }
 .field input, .field select { width: 100%; height: 37px; min-width: 0; padding: 0 10px; border: 1px solid #e6e7ee; border-radius: 7px; outline: none; background: white; color: #4c4e60; font-size: 11px; }
