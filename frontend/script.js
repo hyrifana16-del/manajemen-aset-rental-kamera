@@ -12,6 +12,15 @@ const dateFormatter = new Intl.DateTimeFormat("id-ID", {
 const cameraStatuses = ["Tersedia", "Sedang disewa", "Perbaikan", "Sudah dikembalikan"];
 
 const elements = {
+  appShell: document.getElementById("app-shell"),
+  authMessage: document.getElementById("auth-message"),
+  loginEmail: document.getElementById("login-email"),
+  loginForm: document.getElementById("login-form"),
+  loginPassword: document.getElementById("login-password"),
+  loginScreen: document.getElementById("login-screen"),
+  loginSubmit: document.getElementById("login-submit"),
+  logoutButton: document.getElementById("logout-button"),
+  profileEmail: document.getElementById("profile-email"),
   cameraSelect: document.getElementById("camera-select"),
   cameraForm: document.getElementById("camera-form"),
   cameraFormMessage: document.getElementById("camera-form-message"),
@@ -23,6 +32,7 @@ const elements = {
   endDate: document.getElementById("end-date"),
   form: document.getElementById("rental-form"),
   formMessage: document.getElementById("form-message"),
+  workspaceMessage: document.getElementById("workspace-message"),
   greeting: document.getElementById("dashboard-greeting"),
   journalRows: document.getElementById("journal-rows"),
   renterSelect: document.getElementById("renter-select"),
@@ -49,6 +59,8 @@ let cameraStatusAvailable = true;
 let returnStatusAvailable = true;
 let recentTransactions = [];
 let recentJournals = [];
+let authenticatedUserId = null;
+let authTransition = 0;
 
 function setConnectionState(message, state) {
   elements.connectionStatus.textContent = message;
@@ -65,6 +77,11 @@ function clearFormMessage() {
   elements.formMessage.className = "form-message";
 }
 
+function showWorkspaceMessage(message, type) {
+  elements.workspaceMessage.textContent = message;
+  elements.workspaceMessage.className = `form-message visible ${type}`;
+}
+
 function showStatusMessage(message, type) {
   elements.cameraStatusMessage.textContent = message;
   elements.cameraStatusMessage.className = `form-message visible ${type}`;
@@ -78,6 +95,114 @@ function clearStatusMessage() {
 function showInlineFormMessage(element, message, type) {
   element.textContent = message;
   element.className = `form-message visible ${type}`;
+}
+
+function showAuthMessage(message, type = "error") {
+  elements.authMessage.textContent = message;
+  elements.authMessage.className = `form-message visible ${type}`;
+}
+
+async function applyAuthSession(session) {
+  const user = session?.user;
+  if (user && authenticatedUserId === user.id && !elements.appShell.hidden) return;
+  const transition = ++authTransition;
+  if (!user) {
+    authenticatedUserId = null;
+    elements.appShell.hidden = true;
+    elements.loginScreen.hidden = false;
+    history.replaceState(null, "", `${location.pathname}#login`);
+    elements.loginForm.reset();
+    document.querySelectorAll(".modal[open]").forEach((modal) => modal.close());
+    elements.transactionRows.replaceChildren();
+    elements.cameraStatusRows.replaceChildren();
+    elements.journalRows.replaceChildren();
+    elements.assetValue.textContent = "—";
+    elements.depreciationValue.textContent = "—";
+    elements.rentalCount.textContent = "—";
+    clearFormMessage();
+    clearStatusMessage();
+    elements.workspaceMessage.textContent = "";
+    elements.workspaceMessage.className = "form-message";
+    cameras = [];
+    renters = [];
+    recentTransactions = [];
+    recentJournals = [];
+    setConnectionState("Silakan masuk", "");
+    return;
+  }
+
+  authenticatedUserId = user.id;
+  elements.loginScreen.hidden = true;
+  elements.appShell.hidden = false;
+  history.replaceState(null, "", `${location.pathname}#dashboard`);
+  elements.profileEmail.textContent = user.email || "Akun terautentikasi";
+  if (elements.authMessage.classList.contains("error")) {
+    elements.authMessage.textContent = "";
+    elements.authMessage.className = "form-message";
+  }
+  await loadDashboard(user.id, transition);
+}
+
+async function submitLogin(event) {
+  event.preventDefault();
+  elements.loginSubmit.disabled = true;
+  elements.loginSubmit.textContent = "Memeriksa...";
+  elements.authMessage.className = "form-message";
+  try {
+    if (!window.supabaseClient) {
+      throw new Error(window.supabaseConfigError || "Supabase belum siap.");
+    }
+    const { error } = await window.supabaseClient.auth.signInWithPassword({
+      email: elements.loginEmail.value.trim().toLowerCase(),
+      password: elements.loginPassword.value,
+    });
+    if (error) throw error;
+  } catch (error) {
+    showAuthMessage(error.message || "Login gagal. Periksa email dan password.");
+  } finally {
+    elements.loginSubmit.disabled = false;
+    elements.loginSubmit.textContent = "Masuk";
+  }
+}
+
+async function logout() {
+  elements.logoutButton.disabled = true;
+  try {
+    const { error } = await window.supabaseClient.auth.signOut();
+    if (error) throw error;
+  } catch (error) {
+    showWorkspaceMessage(`Logout gagal: ${error.message || String(error)}`, "error");
+  } finally {
+    elements.logoutButton.disabled = false;
+  }
+}
+
+async function initializeAuth() {
+  elements.loginForm.addEventListener("submit", submitLogin);
+  elements.logoutButton.addEventListener("click", logout);
+  window.addEventListener("hashchange", () => {
+    if (!authenticatedUserId && location.hash !== "#login") {
+      history.replaceState(null, "", `${location.pathname}#login`);
+      elements.appShell.hidden = true;
+      elements.loginScreen.hidden = false;
+    }
+  });
+
+  if (!window.supabaseClient) {
+    showAuthMessage(window.supabaseConfigError || "Supabase belum siap.");
+    return;
+  }
+
+  window.supabaseClient.auth.onAuthStateChange((_event, session) => {
+    setTimeout(() => applyAuthSession(session), 0);
+  });
+
+  const { data, error } = await window.supabaseClient.auth.getSession();
+  if (error) {
+    showAuthMessage(`Sesi tidak dapat dipulihkan: ${error.message}`);
+    return;
+  }
+  await applyAuthSession(data.session);
 }
 
 function parseDateAsUtc(value) {
@@ -256,7 +381,30 @@ async function loadTransactionRows(client) {
   return { result, available: true };
 }
 
-async function loadDashboard() {
+async function loadJournalRows(client) {
+  const result = await client.from("jurnal_penyusutan")
+    .select("id,transaksi_id,kamera_id,tanggal_jurnal,hari_aktivitas,tarif_penyusutan_per_hari,beban_penyusutan,debit,kredit,akun_debit,akun_kredit,metode,transaksi_sewa(kode_transaksi),kamera(kode_aset,nama_aset)")
+    .order("tanggal_jurnal", { ascending: false })
+    .limit(8);
+  if (
+    result.error?.code === "42703" &&
+    (result.error.message.includes("debit") || result.error.message.includes("kredit"))
+  ) {
+    const fallback = await client.from("jurnal_penyusutan")
+      .select("id,transaksi_id,kamera_id,tanggal_jurnal,hari_aktivitas,tarif_penyusutan_per_hari,beban_penyusutan,akun_debit,akun_kredit,metode,transaksi_sewa(kode_transaksi),kamera(kode_aset,nama_aset)")
+      .order("tanggal_jurnal", { ascending: false })
+      .limit(8);
+    for (const journal of fallback.data || []) {
+      journal.debit = journal.beban_penyusutan;
+      journal.kredit = journal.beban_penyusutan;
+    }
+    return fallback;
+  }
+  return result;
+}
+
+async function loadDashboard(expectedUserId = authenticatedUserId, expectedTransition = authTransition) {
+  if (!expectedUserId || expectedTransition !== authTransition) return;
   if (!window.supabaseClient) {
     const reason = window.supabaseConfigError || "Konfigurasi Supabase belum tersedia.";
     setConnectionState("Konfigurasi belum siap", "error");
@@ -283,16 +431,14 @@ async function loadDashboard() {
       loadCameraRows(client),
       client.from("penyewa").select("id,nama,no_telepon").order("nama"),
       loadTransactionRows(client),
-      client.from("jurnal_penyusutan")
-        .select("id,kamera_id,tanggal_jurnal,hari_aktivitas,beban_penyusutan,transaksi_sewa(kode_transaksi),kamera(kode_aset,nama_aset)")
-        .order("tanggal_jurnal", { ascending: false })
-        .limit(8),
+      loadJournalRows(client),
       client.from("transaksi_sewa").select("id", { count: "exact", head: true }),
     ]);
   } catch (error) {
+    if (expectedUserId !== authenticatedUserId || expectedTransition !== authTransition) return;
     const detail = error instanceof Error ? error.message : String(error);
     setConnectionState("Gagal memuat data", "error");
-    showFormMessage(`Tidak dapat memuat data Supabase: ${detail}. Periksa koneksi dan pastikan database/schema.sql sudah dijalankan.`, "error");
+    showFormMessage(`Tidak dapat memuat data Supabase: ${detail}. Periksa koneksi dan kecocokan struktur tabel di Supabase.`, "error");
     elements.transactionRows.replaceChildren();
     const row = elements.transactionRows.insertRow();
     const cell = row.insertCell();
@@ -301,6 +447,7 @@ async function loadDashboard() {
     cell.textContent = detail;
     return;
   }
+  if (expectedUserId !== authenticatedUserId || expectedTransition !== authTransition) return;
   const cameraResult = cameraLoad.result;
   transactionResult = transactionLoad.result;
   returnStatusAvailable = transactionLoad.available;
@@ -311,7 +458,7 @@ async function loadDashboard() {
   if (firstError) {
     setConnectionState("Gagal memuat data", "error");
     showFormMessage(
-      `Tidak dapat memuat data Supabase: ${firstError.error.message}. Periksa URL/kunci Supabase dan pastikan database/schema.sql sudah dijalankan.`,
+      `Tidak dapat memuat data Supabase: ${firstError.error.message}. Periksa URL/kunci dan struktur tabel Supabase.`,
       "error",
     );
     elements.transactionRows.replaceChildren();
@@ -336,7 +483,9 @@ async function loadDashboard() {
     );
   }
 
-  addSelectOptions(elements.cameraSelect, "Pilih aset kamera", cameras, (camera) =>
+  const rentableCameras = cameras.filter((camera) =>
+    ["Tersedia", "Sudah dikembalikan"].includes(camera.status_operasional));
+  addSelectOptions(elements.cameraSelect, "Pilih aset kamera", rentableCameras, (camera) =>
     `${camera.kode_aset} — ${camera.nama_aset}`);
   addSelectOptions(elements.renterSelect, "Pilih penyewa", renters, (renter) =>
     renter.no_telepon ? `${renter.nama} · ${renter.no_telepon}` : renter.nama);
@@ -371,7 +520,7 @@ async function loadDashboard() {
   }
   if (statusSetupWarnings.length) {
     showStatusMessage(
-      `${statusSetupWarnings.join(" ")} Jalankan database/schema.sql di Supabase untuk mengaktifkan status kamera dan otomatisasi jurnal.`,
+      `${statusSetupWarnings.join(" ")} Jalankan database/migrations/20261019_double_entry_returns.sql di Supabase.`,
       "error",
     );
   } else {
@@ -404,8 +553,8 @@ function renderTransactions(transactions) {
     row.insertCell().textContent = transaction.penyewa?.nama || "—";
     row.insertCell().textContent = `${dateFormatter.format(parseDateAsUtc(transaction.tanggal_mulai))} – ${dateFormatter.format(parseDateAsUtc(transaction.tanggal_selesai))}`;
     row.insertCell().textContent = transaction.status_pengembalian === "Sudah kembali"
-      ? "Selesai"
-      : transaction.status === "Booking" ? "Booking" : transaction.status;
+      ? "Sudah kembali"
+      : transaction.status === "Booking" ? "Booking" : "Sedang disewa";
     row.insertCell().textContent = currencyFormatter.format(Number(transaction.total_biaya));
     const actionCell = row.insertCell();
     if (transaction.status === "Dibatalkan") {
@@ -413,16 +562,15 @@ function renderTransactions(transactions) {
       continue;
     }
     const returnButton = document.createElement("button");
+    const isReturned = transaction.status_pengembalian === "Sudah kembali";
     returnButton.type = "button";
-    returnButton.className = `return-status-toggle${transaction.status_pengembalian === "Sudah kembali" ? " returned" : ""}`;
+    returnButton.className = `return-status-toggle${isReturned ? " returned" : ""}`;
     returnButton.dataset.transactionId = transaction.id;
-    returnButton.textContent = transaction.status_pengembalian === "Sudah kembali"
-      ? "Sudah kembali"
-      : "Belum kembali";
-    returnButton.disabled = !returnStatusAvailable;
+    returnButton.textContent = isReturned ? "Sudah kembali" : "Tandai kembali";
+    returnButton.disabled = !returnStatusAvailable || isReturned;
     returnButton.setAttribute(
       "aria-label",
-      `Ubah status pengembalian ${transaction.kode_transaksi}; saat ini ${returnButton.textContent}`,
+      `${isReturned ? "Status pengembalian" : "Tandai pengembalian"} ${transaction.kode_transaksi}; ${returnButton.textContent}`,
     );
     returnButton.title = "Klik untuk mengubah status pengembalian";
     returnButton.setAttribute("aria-pressed", String(transaction.status_pengembalian === "Sudah kembali"));
@@ -472,6 +620,45 @@ async function saveCameraStatus(select) {
   select.disabled = true;
   clearStatusMessage();
   try {
+    if (nextStatus === "Sudah dikembalikan" && returnStatusAvailable) {
+      const { data: openRentals, error: rentalsError } = await window.supabaseClient
+        .from("transaksi_sewa")
+        .select("id,tanggal_mulai")
+        .eq("kamera_id", camera.id)
+        .eq("status_pengembalian", "Belum kembali")
+        .neq("status", "Dibatalkan");
+      if (rentalsError) throw new Error(rentalsError.message);
+      if (openRentals.length > 1) {
+        throw new Error("Lebih dari satu transaksi belum kembali menggunakan kamera ini. Selesaikan tiap transaksi dari daftar rental.");
+      }
+      if (openRentals.length === 1) {
+        if (openRentals[0].tanggal_mulai > localDateValue()) {
+          throw new Error("Kamera belum dapat ditandai kembali sebelum tanggal mulai sewa.");
+        }
+        const { data: returnedRental, error: returnError } = await window.supabaseClient
+          .from("transaksi_sewa")
+          .update({
+            status: "Selesai",
+            status_pengembalian: "Sudah kembali",
+            tanggal_pengembalian: localDateValue(),
+          })
+          .eq("id", openRentals[0].id)
+          .eq("status_pengembalian", "Belum kembali")
+          .select("id")
+          .maybeSingle();
+        if (returnError || !returnedRental) {
+          throw new Error(returnError?.message || "Transaksi sudah berubah atau tidak dapat diperbarui.");
+        }
+        const { error: cameraStateError } = await window.supabaseClient
+          .from("kamera")
+          .update({ status_operasional: "Tersedia" })
+          .eq("id", camera.id);
+        if (cameraStateError) throw new Error(cameraStateError.message);
+        await loadDashboard();
+        showStatusMessage(`Pengembalian ${camera.kode_aset} dan status aset berhasil diperbarui.`, "success");
+        return;
+      }
+    }
     const { data, error } = await window.supabaseClient
       .from("kamera")
       .update({ status_operasional: nextStatus })
@@ -495,7 +682,7 @@ function renderJournals(journals) {
   if (journals.length === 0) {
     const row = elements.journalRows.insertRow();
     const cell = row.insertCell();
-    cell.colSpan = 4;
+    cell.colSpan = 6;
     cell.className = "empty-state";
     cell.textContent = "Jurnal penyusutan akan tercatat setelah transaksi sewa disimpan.";
     return;
@@ -514,6 +701,8 @@ function renderJournals(journals) {
       : "Aset tidak tersedia";
     referenceCell.append(code, camera);
     row.insertCell().textContent = `${journal.hari_aktivitas} hari`;
+    row.insertCell().textContent = currencyFormatter.format(Number(journal.debit ?? journal.beban_penyusutan));
+    row.insertCell().textContent = currencyFormatter.format(Number(journal.kredit ?? journal.beban_penyusutan));
     row.insertCell().textContent = currencyFormatter.format(Number(journal.beban_penyusutan));
   }
 }
@@ -551,9 +740,9 @@ function downloadCsv(filename, headers, rows) {
 }
 
 async function exportCsv(button, kind) {
-  const originalLabel = button.textContent;
+  const originalLabel = button.getAttribute("aria-label");
   button.disabled = true;
-  button.textContent = "Menyiapkan CSV...";
+  button.setAttribute("aria-label", "Menyiapkan file CSV");
   try {
     const client = window.supabaseClient;
     const today = localDateValue();
@@ -577,11 +766,11 @@ async function exportCsv(button, kind) {
       ]));
     } else {
       const rows = await fetchAllPages(() => client.from("jurnal_penyusutan")
-        .select("tanggal_jurnal,hari_aktivitas,tarif_penyusutan_per_hari,beban_penyusutan,akun_debit,akun_kredit,metode,transaksi_sewa(kode_transaksi),kamera(kode_aset,nama_aset)")
+        .select("tanggal_jurnal,hari_aktivitas,tarif_penyusutan_per_hari,beban_penyusutan,debit,kredit,akun_debit,akun_kredit,metode,transaksi_sewa(kode_transaksi),kamera(kode_aset,nama_aset)")
         .order("tanggal_jurnal", { ascending: false }));
       downloadCsv(`jurnal-penyusutan-${today}.csv`, [
         "Tanggal Jurnal", "Kode Transaksi", "Kode Aset", "Nama Kamera", "Hari Aktivitas",
-        "Tarif Penyusutan per Hari", "Beban Penyusutan", "Akun Debit", "Akun Kredit", "Metode",
+        "Tarif Penyusutan per Hari", "Debit", "Kredit", "Beban Penyusutan", "Akun Debit", "Akun Kredit", "Metode",
       ], rows.map((journal) => [
         journal.tanggal_jurnal,
         journal.transaksi_sewa?.kode_transaksi,
@@ -589,6 +778,8 @@ async function exportCsv(button, kind) {
         journal.kamera?.nama_aset,
         journal.hari_aktivitas,
         journal.tarif_penyusutan_per_hari,
+        journal.debit,
+        journal.kredit,
         journal.beban_penyusutan,
         journal.akun_debit,
         journal.akun_kredit,
@@ -599,7 +790,7 @@ async function exportCsv(button, kind) {
     showFormMessage(`CSV gagal diunduh: ${error.message || String(error)}`, "error");
   } finally {
     button.disabled = false;
-    button.textContent = originalLabel;
+    button.setAttribute("aria-label", originalLabel);
   }
 }
 
@@ -724,7 +915,7 @@ async function submitRental(event) {
   }
 
   const client = window.supabaseClient;
-  const isBooking = elements.endDate.value > localDateValue();
+  const isBooking = elements.startDate.value > localDateValue();
   elements.submitButton.disabled = true;
   elements.submitButton.querySelector("span").textContent = "Menyimpan...";
   const transaction = {
@@ -735,46 +926,37 @@ async function submitRental(event) {
     tanggal_selesai: elements.endDate.value,
     total_biaya: rentalFee,
     status: isBooking ? "Booking" : "Selesai",
-    status_pengembalian: isBooking ? "Belum kembali" : "Sudah kembali",
-    tanggal_pengembalian: isBooking ? null : elements.endDate.value,
+    status_pengembalian: "Belum kembali",
+    tanggal_pengembalian: null,
   };
 
   try {
-    const { data: savedTransaction, error: transactionError } = await client
+    const { error: transactionError } = await client
       .from("transaksi_sewa")
-      .insert(transaction)
-      .select("id")
-      .single();
+      .insert(transaction);
     if (transactionError) throw new Error(`Transaksi gagal disimpan: ${transactionError.message}`);
 
+    let cameraUpdateError = null;
+    if (cameraStatusAvailable) {
+      const { error } = await client
+        .from("kamera")
+        .update({ status_operasional: "Sedang disewa" })
+        .eq("id", camera.id);
+      cameraUpdateError = error;
+    }
     elements.form.reset();
     updateEndDateMinimum();
     syncCameraRate();
     refreshRentalPreviews();
     await loadDashboard();
-    if (isBooking) {
-      showFormMessage("Booking tersimpan. Jurnal penyusutan otomatis dibuat saat kamera ditandai sudah kembali.", "success");
-      return;
-    }
-
-    const { data: journal, error: journalError } = await client
-      .from("jurnal_penyusutan")
-      .select("id,beban_penyusutan")
-      .eq("transaksi_id", savedTransaction.id)
-      .maybeSingle();
-    if (journalError) {
-      showFormMessage(`Transaksi tersimpan, tetapi jurnal otomatis tidak dapat diverifikasi: ${journalError.message}`, "error");
-    } else if (!journal) {
-      showFormMessage(
-        "Transaksi tersimpan, tetapi jurnal otomatis belum dibuat. Jalankan database/schema.sql di Supabase untuk memasang trigger jurnal.",
-        "error",
-      );
-    } else {
-      showFormMessage(
-        `Transaksi dan jurnal penyusutan otomatis tersimpan. Beban: ${currencyFormatter.format(Number(journal.beban_penyusutan))}.`,
-        "success",
-      );
-    }
+    showFormMessage(
+      cameraUpdateError
+        ? `Transaksi tersimpan, tetapi status kamera gagal diperbarui: ${cameraUpdateError.message}`
+        : isBooking
+          ? "Booking tersimpan. Jurnal penyusutan dibuat setelah kamera benar-benar dikembalikan."
+          : "Transaksi tersimpan. Tandai kembali setelah kamera diterima untuk membuat jurnal penyusutan.",
+      cameraUpdateError ? "error" : "success",
+    );
   } catch (error) {
     showFormMessage(error.message || "Terjadi kesalahan saat menyimpan transaksi.", "error");
   } finally {
@@ -822,57 +1004,55 @@ async function toggleReturnStatus(button) {
     (item) => String(item.id) === button.dataset.transactionId,
   );
   if (!transaction || !returnStatusAvailable) return;
-  const isReturned = transaction.status_pengembalian === "Sudah kembali";
-  if (!isReturned && transaction.tanggal_mulai > localDateValue()) {
-    showFormMessage("Kamera belum dapat ditandai kembali sebelum tanggal mulai sewa.", "error");
+  if (transaction.status_pengembalian === "Sudah kembali") return;
+  if (transaction.tanggal_mulai > localDateValue()) {
+    showWorkspaceMessage("Kamera belum dapat ditandai kembali sebelum tanggal mulai sewa.", "error");
     return;
   }
   const originalLabel = button.textContent;
   button.disabled = true;
   button.textContent = "Menyimpan...";
   try {
-    const nowReturned = !isReturned;
-    const nextStatus = nowReturned ? "Sudah kembali" : "Belum kembali";
     const { data: updatedTransaction, error: updateError } = await window.supabaseClient
       .from("transaksi_sewa")
       .update({
-        status: transaction.tanggal_selesai > localDateValue()
-          ? (nowReturned ? "Selesai" : "Booking")
-          : "Selesai",
-        status_pengembalian: nextStatus,
-        tanggal_pengembalian: nowReturned ? localDateValue() : null,
+        status: "Selesai",
+        status_pengembalian: "Sudah kembali",
+        tanggal_pengembalian: localDateValue(),
       })
       .eq("id", transaction.id)
+      .eq("status_pengembalian", "Belum kembali")
       .select("id")
       .maybeSingle();
     if (updateError || !updatedTransaction) {
       throw new Error(updateError?.message || "Perubahan status tidak diizinkan oleh Supabase.");
     }
+    let cameraUpdateError = null;
+    if (cameraStatusAvailable) {
+      const { error } = await window.supabaseClient
+        .from("kamera")
+        .update({ status_operasional: "Tersedia" })
+        .eq("id", transaction.kamera_id);
+      cameraUpdateError = error;
+    }
     await loadDashboard();
-    if (nowReturned) {
-      const { data: journal, error: journalError } = await window.supabaseClient
-        .from("jurnal_penyusutan")
-        .select("id,beban_penyusutan")
-        .eq("transaksi_id", transaction.id)
-        .maybeSingle();
-      if (journalError) {
-        showFormMessage(`Status pengembalian tersimpan, tetapi jurnal otomatis tidak dapat diverifikasi: ${journalError.message}`, "error");
-      } else if (!journal) {
-        showFormMessage(
-          "Status pengembalian tersimpan, tetapi jurnal belum dibuat. Jalankan database/schema.sql di Supabase untuk memasang trigger jurnal otomatis.",
-          "error",
-        );
-      } else {
-        showFormMessage(
-          `Kamera ditandai sudah kembali. Jurnal penyusutan otomatis tersimpan sebesar ${currencyFormatter.format(Number(journal.beban_penyusutan))}.`,
-          "success",
-        );
-      }
+    const { data: journal, error: journalError } = await window.supabaseClient
+      .from("jurnal_penyusutan")
+      .select("id,beban_penyusutan")
+      .eq("transaksi_id", transaction.id)
+      .maybeSingle();
+    if (journalError) {
+      showWorkspaceMessage(`Pengembalian tersimpan, tetapi jurnal tidak dapat diverifikasi: ${journalError.message}`, "error");
+    } else if (!journal) {
+      showWorkspaceMessage("Pengembalian tersimpan, tetapi jurnal tidak ditemukan. Jalankan migrasi database/migrations/20261019_double_entry_returns.sql di Supabase.", "error");
     } else {
-      showFormMessage("Status kamera diubah menjadi belum kembali.", "success");
+      showWorkspaceMessage(cameraUpdateError
+        ? `Pengembalian dan jurnal tersimpan, tetapi status kamera belum diperbarui: ${cameraUpdateError.message}`
+        : `Kamera kembali dan tersedia. Jurnal seimbang tersimpan sebesar ${currencyFormatter.format(Number(journal.beban_penyusutan))}.`,
+      cameraUpdateError ? "error" : "success");
     }
   } catch (error) {
-    showFormMessage(error.message || "Status pengembalian gagal disimpan.", "error");
+    showWorkspaceMessage(error.message || "Status pengembalian gagal disimpan.", "error");
     button.disabled = false;
     button.textContent = originalLabel;
   }
@@ -883,6 +1063,12 @@ document.getElementById("today-label").textContent = new Intl.DateTimeFormat("id
   weekday: "short",
   day: "numeric",
   month: "short",
+  year: "numeric",
+}).format(now);
+document.getElementById("workspace-date-label").textContent = new Intl.DateTimeFormat("id-ID", {
+  weekday: "long",
+  day: "numeric",
+  month: "long",
   year: "numeric",
 }).format(now);
 const hour = now.getHours();
@@ -913,6 +1099,20 @@ elements.transactionRows.addEventListener("click", (event) => {
   const button = event.target.closest(".return-status-toggle");
   if (button) toggleReturnStatus(button);
 });
+document.querySelectorAll("[data-open-modal]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const modal = document.getElementById(button.dataset.openModal);
+    if (modal instanceof HTMLDialogElement) modal.showModal();
+  });
+});
+document.querySelectorAll("[data-close-modal]").forEach((button) => {
+  button.addEventListener("click", () => button.closest("dialog")?.close());
+});
+document.querySelectorAll(".modal").forEach((modal) => {
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) modal.close();
+  });
+});
 syncCameraRate();
 updateEndDateMinimum();
-loadDashboard();
+initializeAuth();
